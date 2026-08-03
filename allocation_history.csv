@@ -1,4 +1,1 @@
-allocation_id,date,day_order,period,class_year,subject,absent_staff,assigned_staff,same_class_priority,daily_load_before,daily_load_after,weekly_extra_before,monthly_extra_before,reason,saved_at
-c7029320476d5cea,2026-08-03,Day 1,1,1st Year UG,PRV,Dr. M. Vijila,Dr. K. Esther Jenitha,False,2,3,0,0,"Free professor; daily load 2→3, weekly extras 0, monthly extras 0.",2026-08-03T16:22:57
-921970a960ebe3dd,2026-08-03,Day 1,5,3rd Year UG,Bio. Stat,Dr. S. Saalini,Prof. M. Syluvai Antony,True,2,3,0,0,"Same-class professor; daily load 2→3, weekly extras 0, monthly extras 0.",2026-08-03T16:22:57
-8043ee0b397ff14c,2026-08-03,Day 1,1,1st Year PG,R&CDA,Dr. S. Selva Arul Pandian,Dr. M. Jeevitha,True,2,3,0,0,"Same-class professor; daily load 2→3, weekly extras 0, monthly extras 0.",2026-08-03T16:22:57
+
