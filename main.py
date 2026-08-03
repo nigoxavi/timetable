@@ -17,8 +17,8 @@ from timetable_data import (
 )
 
 
-st.set_page_config(page_title="Statistics Department - Class Substitution", page_icon="📚", layout="wide")
-st.title("Class Substitution Planner")
+st.set_page_config(page_title="Statistics Department", page_icon="📚", layout="wide")
+st.title("Statistics Department - Class Substitution")
 st.caption("Same-class priority • 3-period daily cap • shared-lab protection • fair weekly/monthly rotation")
 
 history_store = HistoryStore(Path(__file__).with_name("allocation_history.csv"))
