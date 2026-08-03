@@ -17,7 +17,7 @@ from timetable_data import (
 )
 
 
-st.set_page_config(page_title="Statistics Department", page_icon="SD", layout="wide")
+st.set_page_config(page_title="Statistics Department", page_icon="", layout="wide")
 st.title("Statistics Department - Class Substitution")
 st.caption("Same-class priority • 3-period daily cap • shared-lab protection • fair weekly/monthly rotation")
 
