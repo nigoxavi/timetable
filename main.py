@@ -17,7 +17,7 @@ from timetable_data import (
 )
 
 
-st.set_page_config(page_title="Class Substitution Planner", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Statistics Department - Class Substitution", page_icon="📚", layout="wide")
 st.title("Class Substitution Planner")
 st.caption("Same-class priority • 3-period daily cap • shared-lab protection • fair weekly/monthly rotation")
 
