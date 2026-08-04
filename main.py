@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import date
 from pathlib import Path
 
@@ -12,12 +14,25 @@ from allocation import (
     generate_substitution_plan, monthly_report,
 )
 from timetable_data import (
-    DAY_ORDERS, DEFAULT_HOD, DEFAULT_RESTRICTED_STAFF, MAX_DAILY_PERIODS,
-    STAFF, TIMETABLE,
+    DAY_ORDERS, DEFAULT_HOD, DEFAULT_RESTRICTED_STAFF,
+    FOURTH_PERIOD_JUNIOR_STAFF, MAX_DAILY_PERIODS, STAFF, TIMETABLE,
 )
 
 
-st.set_page_config(page_title="Statistics Department", page_icon="📚", layout="wide")
+HISTORY_USERNAME = "stats"
+HISTORY_PASSWORD_HASH = "2bb2b13475de1407455a7bd20d7ae32078e7fb8bd8d3a2de871a752c625bb3e1"
+
+
+def valid_department_credentials(username: str, password: str) -> bool:
+    """Validate department credentials without storing the password text."""
+    entered_password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return (
+        hmac.compare_digest(username, HISTORY_USERNAME)
+        and hmac.compare_digest(entered_password_hash, HISTORY_PASSWORD_HASH)
+    )
+
+
+st.set_page_config(page_title="Statistics Delegation", page_icon="📚", layout="wide")
 st.title("Statistics Department - Class Substitution")
 st.caption("Same-class priority • 3-period daily cap • shared-lab protection • fair weekly/monthly rotation")
 
@@ -35,6 +50,7 @@ with st.sidebar:
         default=[name for name in DEFAULT_RESTRICTED_STAFF if name in STAFF],
     )
     st.info(f"Maximum total workload: {MAX_DAILY_PERIODS} periods per professor per day.")
+    st.caption("If no standard candidate is available because of this cap, an eligible junior lab professor may receive one fourth period.")
 
 left, middle, right = st.columns([1, 1, 2])
 with left:
@@ -51,6 +67,7 @@ if st.button("Generate substitution plan", type="primary", use_container_width=T
         st.session_state["plan"] = generate_substitution_plan(
             TIMETABLE, selected_date, day_order, absent, history,
             hod=hod, restricted_staff=restricted, max_daily_periods=MAX_DAILY_PERIODS,
+            fourth_period_staff=FOURTH_PERIOD_JUNIOR_STAFF,
         )
         st.session_state["plan_key"] = (selected_date.isoformat(), day_order, tuple(sorted(absent)))
 
@@ -61,7 +78,7 @@ if plan is not None:
         st.info("The selected absent professors have no classes in this day order.")
     else:
         st.dataframe(plan, use_container_width=True, hide_index=True)
-        proposed = int(plan["status"].eq("Proposed").sum())
+        proposed = int(plan["status"].str.startswith("Proposed").sum())
         skipped = int(plan["status"].str.startswith("Skipped").sum())
         unassigned = int(plan["status"].eq("Unassigned").sum())
         a, b, c = st.columns(3)
@@ -69,13 +86,30 @@ if plan is not None:
         b.metric("Shared classes skipped", skipped)
         c.metric("Unassigned", unassigned)
 
+        if "save_login_open" not in st.session_state:
+            st.session_state["save_login_open"] = False
+
         if st.button("Save confirmed allocations", disabled=proposed == 0):
-            saved = history_store.save_confirmed(plan)
-            if saved:
-                st.success(f"Saved {saved} confirmed allocation(s).")
-                history = history_store.load()
-            else:
-                st.info("Nothing new was saved; these allocations may already be in history.")
+            st.session_state["save_login_open"] = True
+
+        if st.session_state["save_login_open"]:
+            with st.form("save_allocation_login_form", clear_on_submit=True):
+                st.subheader("Confirm authorization to save")
+                save_username = st.text_input("User name", key="save_username")
+                save_password = st.text_input("Password", type="password", key="save_password")
+                save_login_submitted = st.form_submit_button("Authorize and save", type="primary")
+
+            if save_login_submitted:
+                if valid_department_credentials(save_username, save_password):
+                    saved = history_store.save_confirmed(plan)
+                    st.session_state["save_login_open"] = False
+                    if saved:
+                        st.success(f"Saved {saved} confirmed allocation(s).")
+                        history = history_store.load()
+                    else:
+                        st.info("Nothing new was saved; these allocations may already be in history.")
+                else:
+                    st.error("Incorrect user name or password. Allocations were not saved.")
 
         daily_name = f"substitution_plan_{plan.iloc[0]['date']}"
         d1, d2 = st.columns(2)
@@ -106,6 +140,36 @@ r2.download_button(
     f"{report_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-with st.expander("Saved allocation history"):
-    st.dataframe(history_store.load(), use_container_width=True, hide_index=True)
+st.divider()
+if "history_login_open" not in st.session_state:
+    st.session_state["history_login_open"] = False
+if "history_authenticated" not in st.session_state:
+    st.session_state["history_authenticated"] = False
 
+if st.button("Saved allocation history"):
+    st.session_state["history_login_open"] = True
+
+if st.session_state["history_login_open"]:
+    if not st.session_state["history_authenticated"]:
+        with st.form("history_login_form", clear_on_submit=True):
+            st.subheader("History login")
+            history_username = st.text_input("User name")
+            history_password = st.text_input("Password", type="password")
+            login_submitted = st.form_submit_button("Login", type="primary")
+
+        if login_submitted:
+            if valid_department_credentials(history_username, history_password):
+                st.session_state["history_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect user name or password.")
+    else:
+        history_title, logout_column = st.columns([5, 1])
+        with history_title:
+            st.subheader("Saved allocation history")
+        with logout_column:
+            if st.button("Log out"):
+                st.session_state["history_authenticated"] = False
+                st.session_state["history_login_open"] = False
+                st.rerun()
+        st.dataframe(history_store.load(), use_container_width=True, hide_index=True)

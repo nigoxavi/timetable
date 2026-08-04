@@ -16,6 +16,20 @@ DAY_ORDERS = tuple(f"Day {number}" for number in range(1, 7))
 PERIODS = (1, 2, 3, 4, 5)
 MAX_DAILY_PERIODS = 3
 
+# These junior professors may receive one fourth period, but only when an
+# allocation would otherwise be unassigned solely because every free standard
+# candidate has already reached the normal three-period cap.
+FOURTH_PERIOD_JUNIOR_STAFF = (
+    "Dr. S. Saalini",
+    "Dr. V. Sumathy",
+    "Dr. M. Vijila",
+    "Dr. V. Chandar",
+    "Dr. R. Senthil Kumar",
+    "Dr. L. Pephine Renitta",
+    "Dr. M. Jeevitha",
+    "Dr. B. Ruban Raja",
+)
+
 # Change these values here, or override them from the Streamlit sidebar.
 DEFAULT_HOD = "Dr. S. Xavier"
 DEFAULT_RESTRICTED_STAFF: tuple[str, ...] = ()
@@ -37,4 +51,3 @@ def load_timetable(path: str | Path = DATA_FILE) -> dict[str, dict[str, dict[int
 
 TIMETABLE = load_timetable()
 STAFF = tuple(TIMETABLE)
-

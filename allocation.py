@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import re
+import unicodedata
 from collections import Counter
 from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO
@@ -31,9 +33,45 @@ def _daily_base_load(timetable: dict, staff: str, day_order: str) -> int:
 
 def _teaches_class(timetable: dict, staff: str, class_year: str) -> bool:
     return any(
-        lesson and lesson.get("year") == class_year
+        lesson and _normalized(lesson.get("year")) == _normalized(class_year)
         for day in timetable.get(staff, {}).values()
         for lesson in day.values()
+    )
+
+
+def _teaches_subject(timetable: dict, staff: str, subject: str) -> bool:
+    """Return whether a professor already teaches the same paper."""
+    return any(
+        lesson and _normalized(lesson.get("subject")) == _normalized(subject)
+        for day in timetable.get(staff, {}).values()
+        for lesson in day.values()
+    )
+
+
+def _normalized(value: Any) -> str:
+    """Normalize harmless spelling/spacing differences in timetable labels."""
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _normalized_co_taught_year(value: Any) -> str:
+    """Normalize class labels only for co-teacher detection.
+
+    In the supplied timetable, undergraduate classes are sometimes recorded as
+    ``3rd Year`` and sometimes as ``3rd Year UG``.  They denote the same class.
+    ``PG`` is deliberately retained so undergraduate and postgraduate classes
+    can never be merged accidentally.  This narrow normalization does not alter
+    candidate priority, workload, fairness, or daily-cap calculations.
+    """
+    normalized = _normalized(value)
+    return re.sub(r"\s+ug$", "", normalized).strip()
+
+
+def _same_class_and_subject(left: dict, right: dict) -> bool:
+    return (
+        _normalized(left.get("subject")) == _normalized(right.get("subject"))
+        and _normalized_co_taught_year(left.get("year"))
+        == _normalized_co_taught_year(right.get("year"))
     )
 
 
@@ -49,16 +87,22 @@ def _history_counts(history: pd.DataFrame, professor: str, selected_date: date) 
     return weekly, monthly
 
 
-def _co_teacher_present(
+def _co_teachers_present(
     timetable: dict, absent_staff: set[str], day_order: str, period: int, lesson: dict
-) -> str | None:
+) -> list[str]:
+    """Return every active co-teacher in the exact class slot.
+
+    This correctly handles each hour of a multi-period shared class. A teacher
+    scheduled in the same subject/class but a different period is not counted.
+    """
+    present = []
     for staff in timetable:
         if staff in absent_staff:
             continue
         other = _lesson(timetable, staff, day_order, period)
-        if other and other.get("subject") == lesson.get("subject") and other.get("year") == lesson.get("year"):
-            return staff
-    return None
+        if other and _same_class_and_subject(other, lesson):
+            present.append(staff)
+    return present
 
 
 def generate_substitution_plan(
@@ -70,6 +114,7 @@ def generate_substitution_plan(
     hod: str | None = None,
     restricted_staff: Iterable[str] = (),
     max_daily_periods: int = 3,
+    fourth_period_staff: Iterable[str] = (),
 ) -> pd.DataFrame:
     """Generate a deterministic plan that applies every requested allocation rule."""
     history = history if history is not None else pd.DataFrame(columns=HISTORY_COLUMNS)
@@ -78,37 +123,50 @@ def generate_substitution_plan(
     if hod:
         excluded.add(hod)
     assigned_today: Counter[str] = Counter()
+    fourth_period_eligible = set(fourth_period_staff)
     rows: list[dict[str, Any]] = []
 
     for missing in sorted(absent):
         for period, lesson in sorted(timetable.get(missing, {}).get(day_order, {}).items()):
             if not lesson:
                 continue
-            co_teacher = _co_teacher_present(timetable, absent, day_order, period, lesson)
-            if co_teacher:
+            co_teachers = _co_teachers_present(timetable, absent, day_order, period, lesson)
+            if co_teachers:
+                teacher_names = ", ".join(co_teachers)
                 rows.append({
                     "date": selected_date.isoformat(), "day_order": day_order, "period": period,
                     "class_year": lesson.get("year", ""), "subject": lesson.get("subject", ""),
                     "absent_staff": missing, "assigned_staff": "", "status": "Skipped – co-teacher present",
                     "same_class_priority": False, "daily_load_before": "", "daily_load_after": "",
                     "weekly_extra_before": "", "monthly_extra_before": "",
-                    "reason": f"No substitute required; {co_teacher} is already scheduled for this shared class.",
+                    "reason": f"No substitute required; {teacher_names} is already scheduled for this shared class and period.",
                 })
                 continue
 
-            candidates = []
+            free_candidates = []
             for candidate in timetable:
                 if candidate in excluded or _lesson(timetable, candidate, day_order, period) is not None:
                     continue
                 daily_load = _daily_base_load(timetable, candidate, day_order) + assigned_today[candidate]
-                if daily_load >= max_daily_periods:
-                    continue
                 weekly, monthly = _history_counts(history, candidate, selected_date)
                 same_class = _teaches_class(timetable, candidate, lesson.get("year", ""))
-                # Exact order implements: same class first, then today's load, then
-                # weekly and monthly fairness, with name as a stable final tie-break.
-                candidates.append(((not same_class, daily_load, weekly, monthly, candidate.casefold()),
-                                   candidate, same_class, daily_load, weekly, monthly))
+                same_subject = _teaches_subject(timetable, candidate, lesson.get("subject", ""))
+                free_candidates.append((candidate, same_subject, same_class, daily_load, weekly, monthly))
+
+            standard_candidates = [item for item in free_candidates if item[3] < max_daily_periods]
+            used_fourth_period_fallback = False
+            candidates = standard_candidates
+            if not candidates:
+                # This exception is intentionally narrow: the professor must be
+                # free, explicitly listed as junior lab staff, and currently on
+                # exactly the normal cap. Nobody may exceed four total periods.
+                candidates = [
+                    item for item in free_candidates
+                    if item[0] in fourth_period_eligible
+                    and item[3] >= max_daily_periods
+                    and item[3] < max_daily_periods + 1
+                ]
+                used_fourth_period_fallback = bool(candidates)
 
             if not candidates:
                 rows.append({
@@ -117,21 +175,37 @@ def generate_substitution_plan(
                     "absent_staff": missing, "assigned_staff": "", "status": "Unassigned",
                     "same_class_priority": False, "daily_load_before": "", "daily_load_after": "",
                     "weekly_extra_before": "", "monthly_extra_before": "",
-                    "reason": f"No eligible free professor can remain within the {max_daily_periods}-period daily cap.",
+                    "reason": (
+                        f"No eligible free professor can remain within the {max_daily_periods}-period daily cap, "
+                        "and no eligible junior lab professor is available for the fourth-period exception."
+                    ),
                 })
                 continue
 
-            _, chosen, same_class, daily_load, weekly, monthly = min(candidates, key=lambda item: item[0])
+            chosen, same_subject, same_class, daily_load, weekly, monthly = min(
+                candidates,
+                key=lambda item: (
+                    not item[1],  # Exact same paper first (for example Python (AO)).
+                    not item[2],  # Then preserve the existing same-class priority.
+                    item[3], item[4], item[5], item[0].casefold(),
+                ),
+            )
             assigned_today[chosen] += 1
             rows.append({
                 "date": selected_date.isoformat(), "day_order": day_order, "period": period,
                 "class_year": lesson.get("year", ""), "subject": lesson.get("subject", ""),
-                "absent_staff": missing, "assigned_staff": chosen, "status": "Proposed",
+                "absent_staff": missing, "assigned_staff": chosen,
+                "status": "Proposed - fourth-period junior fallback" if used_fourth_period_fallback else "Proposed",
                 "same_class_priority": same_class, "daily_load_before": daily_load,
                 "daily_load_after": daily_load + 1, "weekly_extra_before": weekly,
                 "monthly_extra_before": monthly,
                 "reason": (
-                    ("Same-class professor; " if same_class else "Free professor; ")
+                    ("Fourth-period junior lab fallback; " if used_fourth_period_fallback else "")
+                    + (
+                        "same-paper professor; " if same_subject
+                        else "same-class professor; " if same_class
+                        else "free professor; "
+                    )
                     + f"daily load {daily_load}→{daily_load + 1}, weekly extras {weekly}, monthly extras {monthly}."
                 ),
             })
@@ -156,7 +230,7 @@ class HistoryStore:
     def save_confirmed(self, plan: pd.DataFrame) -> int:
         if plan.empty:
             return 0
-        confirmed = plan[(plan["status"].eq("Proposed")) & plan["assigned_staff"].ne("")].copy()
+        confirmed = plan[(plan["status"].str.startswith("Proposed")) & plan["assigned_staff"].ne("")].copy()
         if confirmed.empty:
             return 0
         existing = self.load()
@@ -213,4 +287,3 @@ def dataframe_excel_bytes(frame: pd.DataFrame, sheet_name: str = "Report") -> by
             width = min(max(len(str(cell.value or "")) for cell in column) + 2, 60)
             sheet.column_dimensions[column[0].column_letter].width = width
     return buffer.getvalue()
-
